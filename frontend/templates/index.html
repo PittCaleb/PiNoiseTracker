@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Noise Tracker Dashboard</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f4f4f9; color: #333; }
+        .container { display: flex; gap: 20px; }
+        .main-panel { flex: 3; }
+        .side-panel { flex: 1; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .timeline-box { background: white; height: 450px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; padding: 20px; position: relative;}
+        
+        .list-container { max-height: 450px; overflow-y: auto; padding-right: 10px; }
+        .event-card { border-bottom: 1px solid #eee; padding: 10px 0; display: flex; justify-content: space-between; align-items: center; transition: background 0.3s;}
+        .event-card.new-event { background: #e8f5e9; } /* Subtle flash for new events */
+        
+        button { cursor: pointer; padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; background: #fff; font-weight:bold; color: #333;}
+        button:hover { background: #eee; }
+        .btn-load-more { width: 100%; padding: 12px; margin-top: 10px; background: #e3f2fd; border: 1px dashed #90caf9; color: #1565c0; font-weight: bold; }
+        .btn-load-more:hover { background: #bbdefb; }
+        
+        .admin-box { margin-top: 30px; padding-top: 20px; border-top: 2px solid #eee; }
+        
+        .grid line { stroke: #e0e0e0; stroke-dasharray: 4,4; }
+        .grid path { stroke-width: 0; }
+        .axis-label { font-size: 12px; fill: #666; }
+    </style>
+</head>
+<body>
+
+    <h1>Noise Tracker</h1>
+    
+    <div class="container">
+        <div class="main-panel">
+            <div class="timeline-box" id="timeline"></div>
+            <h3>Recent Sounds List</h3>
+            <div class="list-container">
+                <div id="event-list"></div>
+            </div>
+        </div>
+
+        <div class="side-panel">
+            <div style="background: #fafafa; padding: 15px; border-radius: 6px; border: 1px solid #ddd; margin-bottom: 20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h3 style="margin:0;">System Status</h3>
+                    <span id="status-badge" style="padding:6px 12px; border-radius:4px; font-size:12px; font-weight:bold; color:white; background:#888;">LOADING</span>
+                </div>
+                <button id="toggle-status-btn" onclick="toggleStatus()" style="width:100%; padding: 10px; margin-bottom: 10px;">Toggle</button>
+                <p style="font-size: 11px; color: #888; margin:0; text-align:center;">Auto-activates at Midnight, auto-deactivates at 8:00 AM.</p>
+            </div>
+
+            <h3>Active Selection</h3>
+            <div id="active-event">
+                <p style="color:#888;">Click an event in the graph or list to listen and tag.</p>
+            </div>
+
+            <div class="admin-box">
+                <h3>Admin Controls</h3>
+                <label style="font-size: 14px; color: #555;">Trigger Threshold (dBFS):</label><br>
+                <div style="margin-top: 8px; display: flex; gap: 10px;">
+                    <input type="number" id="threshold-input" step="0.5" style="width: 80px; padding: 5px;">
+                    <button onclick="saveThreshold()">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let globalEvents = [];
+        let listDisplayLimit = 5;
+        let isListenerActive = true;
+        let currentMaxId = 0; // The Smart Poller state tracker
+
+        // Initialize D3 SVG canvas once
+        const margin = {top: 20, right: 30, bottom: 40, left: 90};
+        let svg, x, y, dates;
+
+        function initD3() {
+            const container = document.getElementById('timeline');
+            container.innerHTML = ''; 
+            const width = container.clientWidth - margin.left - margin.right;
+            const height = container.clientHeight - margin.top - margin.bottom;
+
+            svg = d3.select("#timeline").append("svg")
+                .attr("width", width + margin.left + margin.right)
+                .attr("height", height + margin.top + margin.bottom)
+              .append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+            dates = [];
+            for (let i = 6; i >= 0; i--) {
+                let d = new Date();
+                d.setDate(d.getDate() - i);
+                let dateStr = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, '0') + "-" + String(d.getDate()).padStart(2, '0');
+                dates.push(dateStr);
+            }
+
+            y = d3.scaleBand().domain(dates).range([height, 0]).padding(1);
+            x = d3.scaleTime().domain([new Date(2000, 0, 1, 0, 0, 0), new Date(2000, 0, 2, 0, 0, 0)]).range([0, width]);
+
+            svg.append("g").call(d3.axisLeft(y).tickSizeOuter(0)).attr("class", "axis-label");
+            svg.append("g").attr("class", "grid").call(d3.axisLeft(y).tickSize(-width).tickFormat("").tickSizeOuter(0));
+            svg.append("g").attr("transform", `translate(0, ${height})`).call(d3.axisBottom(x).ticks(d3.timeHour.every(2)).tickFormat(d3.timeFormat("%H:%M"))).attr("class", "axis-label");
+            svg.append("g").attr("class", "grid").attr("transform", `translate(0, ${height})`).call(d3.axisBottom(x).ticks(d3.timeHour.every(1)).tickSize(-height).tickFormat("").tickSizeOuter(0));
+            
+            // Container for our animated dots
+            svg.append("g").attr("class", "dots-layer");
+        }
+
+        async function loadData() {
+            const res = await fetch('/api/events');
+            globalEvents = await res.json();
+            
+            if (globalEvents.length > 0) {
+                // Keep track of the highest ID we've seen
+                currentMaxId = Math.max(...globalEvents.map(e => e.id));
+            }
+
+            renderList();
+            renderTimeline(globalEvents);
+        }
+
+        // --- NEW: Smart Poller ---
+        async function checkForNewEvents() {
+            try {
+                const res = await fetch('/api/latest_id');
+                const data = await res.json();
+                
+                // If the database has a newer record than our frontend knows about
+                if (data.latest_id > currentMaxId) {
+                    console.log(`New event detected! Updating UI from ID ${currentMaxId} to ${data.latest_id}`);
+                    currentMaxId = data.latest_id;
+                    await loadData();
+                }
+            } catch (error) {
+                console.error("Poller error:", error);
+            }
+        }
+
+        // --- Config & Status Logic ---
+        async function loadConfig() {
+            const res = await fetch('/api/config');
+            const data = await res.json();
+            if (document.activeElement !== document.getElementById('threshold-input')) {
+                document.getElementById('threshold-input').value = data.threshold;
+            }
+            isListenerActive = data.active;
+            updateStatusUI();
+        }
+
+        function updateStatusUI() {
+            const badge = document.getElementById('status-badge');
+            const btn = document.getElementById('toggle-status-btn');
+            if (isListenerActive) {
+                badge.innerText = 'ACTIVE';
+                badge.style.background = '#4caf50'; 
+                btn.innerText = 'Turn System OFF';
+            } else {
+                badge.innerText = 'INACTIVE';
+                badge.style.background = '#f44336'; 
+                btn.innerText = 'Turn System ON';
+            }
+        }
+
+        async function toggleStatus() {
+            isListenerActive = !isListenerActive;
+            updateStatusUI();
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({active: isListenerActive})
+            });
+        }
+
+        async function saveThreshold() {
+            const val = parseFloat(document.getElementById('threshold-input').value);
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({threshold: val})
+            });
+            const btn = document.querySelector('.admin-box button');
+            const originalText = btn.innerText;
+            btn.innerText = "Saved!";
+            btn.style.background = "#e8f5e9";
+            setTimeout(() => { btn.innerText = originalText; btn.style.background = "#fff"; }, 2000);
+        }
+
+        // --- List Rendering ---
+        function renderList() {
+            const list = document.getElementById('event-list');
+            list.innerHTML = '';
+            const eventsToShow = globalEvents.slice(0, listDisplayLimit);
+            eventsToShow.forEach((ev, index) => {
+                // Add a subtle CSS flash class to the absolute newest item if we just pulled it
+                const isBrandNew = (index === 0 && ev.id === currentMaxId) ? 'new-event' : '';
+                
+                list.innerHTML += `
+                    <div class="event-card ${isBrandNew}">
+                        <div>
+                            <strong>${ev.start_time.split(' ')[1]}</strong> 
+                            <span style="color:#888; font-size:12px;">(${ev.start_time.split(' ')[0]})</span><br>
+                            <span style="font-size:14px; color:${ev.tag === 'unknown' ? '#ff7f0e' : '#2ca02c'}; font-weight:bold;">${ev.tag.toUpperCase()}</span> 
+                            <span style="font-size:12px; color:#666;"> | Max: ${ev.max_dbfs.toFixed(1)} dB | ${ev.duration.toFixed(1)}s</span>
+                        </div>
+                        <button onclick='selectEvent(${JSON.stringify(ev).replace(/'/g, "\\'")})'>Select</button>
+                    </div>`;
+            });
+            
+            // Remove the flash class after 2 seconds
+            setTimeout(() => {
+                document.querySelectorAll('.new-event').forEach(el => el.classList.remove('new-event'));
+            }, 2000);
+
+            if (listDisplayLimit < globalEvents.length) {
+                list.innerHTML += `<button class="btn-load-more" onclick="loadMoreEvents()">Load More Older Sounds...</button>`;
+            }
+        }
+
+        function loadMoreEvents() {
+            listDisplayLimit += 10;
+            renderList();
+        }
+
+        // --- Review & Tagging ---
+        function selectEvent(ev) {
+            document.getElementById('active-event').innerHTML = `
+                <div style="background: #f9f9f9; padding: 15px; border-radius: 6px; border: 1px solid #ddd;">
+                    <p style="margin: 0 0 10px 0;"><strong>Observed:</strong> ${ev.start_time}</p>
+                    <p style="margin: 0 0 10px 0;"><strong>Level:</strong> ${ev.max_dbfs.toFixed(1)} dBFS</p>
+                    <p style="margin: 0 0 15px 0;"><strong>Duration:</strong> ${ev.duration.toFixed(1)} sec</p>
+                    <audio controls src="/api/audio/${ev.file_path}" autoplay style="width:100%; height: 40px; margin-bottom:15px;"></audio>
+                    <label style="font-size:12px; color:#555;">Tag this sound:</label>
+                    <div style="display:flex; gap:10px; margin-top:5px; margin-bottom: 15px;">
+                        <input type="text" id="tag-input" style="flex:1; padding:5px;" value="${ev.tag === 'unknown' ? '' : ev.tag}" placeholder="e.g. Train, Sirens...">
+                        <button onclick="saveTag(${ev.id})" style="background:#e3f2fd; border-color:#90caf9;">Save Tag</button>
+                    </div>
+                    <hr style="border:0; border-top:1px solid #ddd; margin-bottom:15px;">
+                    <button onclick="deleteEvent(${ev.id})" style="color:red; width:100%; border-color:#ffcdd2; background:#ffebee;">Delete Recording</button>
+                </div>
+            `;
+        }
+
+        async function saveTag(id) {
+            const tag = document.getElementById('tag-input').value || 'unknown';
+            await fetch(`/api/tag/${id}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({tag: tag})
+            });
+            loadData();
+        }
+
+        async function deleteEvent(id) {
+            if(confirm("Permanently delete this audio file and record?")) {
+                await fetch(`/api/event/${id}`, { method: 'DELETE' });
+                document.getElementById('active-event').innerHTML = '<p style="color:#888;">Record deleted. Select another.</p>';
+                loadData();
+            }
+        }
+
+        // --- Elegant Animated D3 Graph ---
+        function renderTimeline(events) {
+            // Bind data to objects using their unique database ID
+            const layer = svg.select(".dots-layer");
+            
+            layer.selectAll("circle")
+                .data(events, d => d.id) 
+                .join(
+                    // ENTER: When a new ID appears, start it small and grow it
+                    enter => enter.append("circle")
+                        .attr("cx", d => {
+                            const timeParts = d.start_time.split(' ')[1].split(':');
+                            return x(new Date(2000, 0, 1, +timeParts[0], +timeParts[1], +timeParts[2]));
+                        })
+                        .attr("cy", d => y(d.start_time.split(' ')[0]) || -100)
+                        .attr("r", 0) // Start at zero radius
+                        .style("fill", d => d.tag === 'unknown' ? "#ff7f0e" : "#2ca02c")
+                        .style("opacity", 0.6)
+                        .style("stroke", "#333")
+                        .style("stroke-width", 0.5)
+                        .style("cursor", "pointer")
+                        .style("display", d => dates.includes(d.start_time.split(' ')[0]) ? "block" : "none")
+                        .on("mouseover", function() { d3.select(this).style("opacity", 1).style("stroke-width", 2); })
+                        .on("mouseout", function() { d3.select(this).style("opacity", 0.6).style("stroke-width", 0.5); })
+                        .on("click", (event, d) => selectEvent(d))
+                        .call(enter => enter.append("title").text(d => `Time: ${d.start_time}\nMax dBFS: ${d.max_dbfs.toFixed(1)}\nDuration: ${d.duration.toFixed(1)}s\nTag: ${d.tag}`))
+                        // Animate into existence
+                        .call(enter => enter.transition().duration(800)
+                            .attr("r", d => {
+                                const magnitude = Math.max(0, d.max_dbfs + 100); 
+                                const dynamicRadius = (magnitude / 10) + (d.duration / 1.5);
+                                return Math.min(30, 4 + dynamicRadius); 
+                            })
+                        ),
+                        
+                    // UPDATE: For existing nodes (e.g. tag colors changing)
+                    update => update.style("fill", d => d.tag === 'unknown' ? "#ff7f0e" : "#2ca02c"),
+                    
+                    // EXIT: For deleted nodes
+                    exit => exit.remove()
+                );
+        }
+
+        window.addEventListener('resize', () => { 
+            initD3(); 
+            renderTimeline(globalEvents); 
+        });
+
+        // Initialize App
+        initD3();
+        loadData();
+        loadConfig();
+        
+        // --- The Timers ---
+        // 1. Smart Poller: Checks for new audio events every 2 seconds
+        setInterval(checkForNewEvents, 2000);
+        
+        // 2. State Poller: Checks if the Midnight/8AM system toggle fired every 10 seconds
+        setInterval(loadConfig, 10000);
+    </script>
+</body>
+</html>
