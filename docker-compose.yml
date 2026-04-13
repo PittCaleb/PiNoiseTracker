@@ -4,17 +4,15 @@ services:
     container_name: noise_listener
     restart: unless-stopped
     devices:
-      - "/dev/snd:/dev/snd" # Critical for ALSA audio pass-through
+      - "/dev/snd:/dev/snd"
     volumes:
       - ./data:/app/data
-    environment:
-      - ALSA_CARD=1 # Your ALSA hardware configuration
 
   dashboard:
     build: ./frontend
     container_name: noise_dashboard
     restart: unless-stopped
     ports:
-      - "5000:5000" # Exposes the web UI to your local network
+      - "5000:5000"
     volumes:
       - ./data:/app/data
