@@ -1,0 +1,10 @@
+# Ignore our dynamic data folder (SQLite DB and WAV files)
+data/
+
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+
+# Ignore OS generated files (Mac/Windows cruft)
+.DS_Store
+Thumbs.db
