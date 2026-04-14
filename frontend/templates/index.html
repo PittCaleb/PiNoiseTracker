@@ -21,6 +21,8 @@
         button { cursor: pointer; padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; background: #fff;}
         .btn-toggle { font-size: 11px; margin-left: 10px; padding: 4px 8px; }
         .btn-delete { background: #fff5f5; color: #c53030; border-color: #feb2b2; margin-top: 10px; width: 100%; font-weight: bold; }
+        .btn-load-more { width: 100%; margin-top: 15px; padding: 10px; background: #f8f9fa; border: 1px dashed #ccc; color: #666; font-size: 12px; }
+        .btn-load-more:hover { background: #eee; color: #333; }
         .tag-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px;}
         .tag-row { border-bottom: 1px solid #eee; height: 45px; }
         .color-picker { border: none; width: 32px; height: 32px; padding: 0; cursor: pointer; background: none; vertical-align: middle; }
@@ -147,6 +149,11 @@
             loadData();
         }
 
+        function loadMore() {
+            listLimit += 10;
+            renderList();
+        }
+
         function renderList() {
             const l = document.getElementById('event-list'); if (!l) return;
             l.innerHTML = '';
@@ -154,6 +161,11 @@
                 const c = tagColors[ev.tag] || '#ccc';
                 l.innerHTML += `<div class="event-card"><div><strong>${ev.start_time.split(' ')[1]}</strong><br><span style="color:${c}; font-weight:bold;">${toTitle(ev.tag)}</span><div class="event-meta">${ev.max_dbfs.toFixed(1)} dB | ${ev.duration.toFixed(1)}s</div></div><button onclick='selectEvent(${JSON.stringify(ev)})'>Review</button></div>`;
             });
+            
+            if (globalEvents.length > listLimit) {
+                const hiddenCount = globalEvents.length - listLimit;
+                l.innerHTML += `<button class="btn-load-more" onclick="loadMore()">Load More (${hiddenCount} hidden)</button>`;
+            }
         }
 
         function renderTimeline(events) {

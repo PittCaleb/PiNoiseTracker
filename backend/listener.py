@@ -34,6 +34,18 @@ def get_config_val(key, default):
     except:
         return default
 
+def check_auto_enable():
+    # This now uses LOCAL time thanks to the Docker volume mount
+    now = datetime.now()
+    if now.hour == 0 and now.minute == 0:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("UPDATE config SET value = 'true' WHERE key = 'system_enabled'")
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
 def update_heartbeat():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -71,7 +83,6 @@ def main():
     }
 
     def audio_callback(indata, frames, time_info, status):
-        # Check if we are paused
         if get_config_val('system_enabled', 'true') == 'false':
             return
 
@@ -81,7 +92,7 @@ def main():
         if dbfs > threshold:
             if not state['is_recording']:
                 state['is_recording'] = True
-                state['start_time'] = datetime.now()
+                state['start_time'] = datetime.now() # Uses local time
                 state['buffer'] = []
                 state['max_db'] = dbfs
             state['cooldown'] = 0
@@ -99,6 +110,7 @@ def main():
     with sd.InputStream(device=device_id, channels=CHANNELS, samplerate=SAMPLE_RATE, callback=audio_callback, blocksize=1024):
         while True:
             update_heartbeat()
+            check_auto_enable()
             try:
                 while not save_queue.empty():
                     start_t, dur, mdb, data = save_queue.get_nowait()

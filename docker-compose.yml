@@ -1,18 +1,34 @@
+version: '3.8'
+
 services:
   audio-listener:
-    build: ./backend
-    container_name: noise_listener
-    restart: unless-stopped
-    devices:
-      - "/dev/snd:/dev/snd"
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: noise-audio-listener
+    privileged: true
+    network_mode: "host"
     volumes:
       - ./data:/app/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
 
   dashboard:
-    build: ./frontend
-    container_name: noise_dashboard
-    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: noise-dashboard
     ports:
       - "5000:5000"
     volumes:
       - ./data:/app/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - audio-listener
+    restart: unless-stopped
