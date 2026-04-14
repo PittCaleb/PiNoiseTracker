@@ -1,9 +1,14 @@
-FROM python:3.11-slim
+FROM python:3.9-slim
 
-# Install ALSA dependencies required for sounddevice
-RUN apt-get update && apt-get install -y libportaudio2 libasound2-dev alsa-utils && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    libasound2-dev \
+    libportaudio2 \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Because context is ./backend, these files are "local" to the build
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
